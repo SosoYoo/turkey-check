@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#1b1410">
+<title>Turkey Check</title>
+<style>
+  :root { --bg:#1b1410; --card:#2a201a; --text:#f4ece4; --mute:#a99a8c; --green:#3fb950; --red:#f85149; --amber:#e3a008; --grey:#6e7681; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--text); font:16px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  body { transition:background .4s; padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+  body.flash-green { background:#12351b; }
+  body.flash-red { background:#4a1512; }
+  body.flash-amber { background:#44330a; }
+  main { max-width:640px; margin:0 auto; padding:16px; }
+  header { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  h1 { font-size:20px; margin:0; }
+  .gear { background:none; border:0; color:var(--mute); font-size:22px; padding:8px; }
+  #status { display:flex; align-items:center; gap:8px; color:var(--mute); font-size:14px; margin:8px 0 12px; }
+  .dot { width:10px; height:10px; border-radius:50%; background:var(--grey); }
+  .dot.on { background:var(--green); animation:pulse 1.4s infinite; }
+  @keyframes pulse { 50% { opacity:.35; } }
+  .row { display:flex; gap:8px; }
+  button.big { flex:1; padding:16px; border:0; border-radius:14px; font-size:17px; font-weight:600; color:#fff; background:#c2410c; }
+  button.big.stop { background:#444; }
+  button.alt { flex:1; padding:16px; border:1px solid #4a3b30; border-radius:14px; font-size:16px; color:var(--text); background:transparent; }
+  #live { margin:12px 0; min-height:40px; padding:10px 12px; border-radius:10px; background:#241b15; color:var(--mute); font-size:14px; }
+  #live b { color:var(--text); font-weight:500; }
+  .manual { display:flex; gap:8px; margin:12px 0; }
+  .manual input { flex:1; padding:12px; border-radius:10px; border:1px solid #4a3b30; background:#241b15; color:var(--text); font-size:16px; }
+  .manual button { padding:0 16px; border-radius:10px; border:0; background:#3b2e24; color:var(--text); font-size:15px; }
+  .card { background:var(--card); border-left:6px solid var(--grey); border-radius:12px; padding:12px 14px; margin:10px 0; animation:in .3s; }
+  @keyframes in { from { transform:translateY(8px); opacity:0; } }
+  .card.true { border-color:var(--green); }
+  .card.false { border-color:var(--red); }
+  .card.misleading { border-color:var(--amber); }
+  .verdict { font-size:12px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; }
+  .true .verdict { color:var(--green); } .false .verdict { color:var(--red); } .misleading .verdict { color:var(--amber); } .unverified .verdict { color:var(--mute); }
+  .claim { font-weight:600; margin:2px 0 4px; }
+  .why { color:#d9cdc1; font-size:15px; }
+  .src { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+  .src a { font-size:12px; color:#9ecbff; background:#1d2733; padding:3px 8px; border-radius:99px; text-decoration:none; }
+  .empty { text-align:center; color:var(--mute); margin:32px 0; }
+  .err { background:#4a1512; color:#ffd2cf; padding:10px 12px; border-radius:10px; margin:10px 0; font-size:14px; }
+  dialog { background:#2a201a; color:var(--text); border:1px solid #4a3b30; border-radius:16px; width:min(92vw,460px); }
+  dialog::backdrop { background:rgba(0,0,0,.6); }
+  dialog label { display:block; margin:12px 0 4px; font-size:14px; color:var(--mute); }
+  dialog input[type=text], dialog input[type=password] { width:100%; padding:10px; border-radius:8px; border:1px solid #4a3b30; background:#1b1410; color:var(--text); font-size:16px; }
+  dialog a { color:#9ecbff; }
+  .small { font-size:13px; color:var(--mute); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>🦃 Turkey Check</h1>
+    <button class="gear" id="gear" aria-label="Settings">⚙︎</button>
+  </header>
+  <div id="status"><span class="dot" id="dot"></span><span id="statusText">Not listening</span></div>
+
+  <div class="row">
+    <button class="big" id="toggle">🎙 Start listening</button>
+    <button class="alt" id="settle">Settle this</button>
+  </div>
+
+  <div id="live"><span class="small">Live transcript appears here.</span></div>
+
+  <form class="manual" id="manual">
+    <input id="manualInput" placeholder="Or type a claim to check…" autocomplete="off">
+    <button type="submit">Check</button>
+  </form>
+
+  <div id="errors"></div>
+  <div id="results"><div class="empty">Nothing checked yet.<br>Only clearly checkable facts get a verdict, so most chatter is ignored.</div></div>
+</main>
+
+<dialog id="settings">
+  <form method="dialog">
+    <h2 style="margin-top:0">Settings</h2>
+    <label for="provider">AI provider</label>
+    <select id="provider" style="width:100%;padding:10px;border-radius:8px;border:1px solid #4a3b30;background:#1b1410;color:#f4ece4;font-size:16px">
+      <option value="claude">Claude (paid, a few cents per dinner)</option>
+      <option value="gemini">Gemini (free tier, rate limited)</option>
+    </select>
+    <div id="claudeBox">
+      <label for="ckey">Claude API key</label>
+      <input type="password" id="ckey" placeholder="sk-ant-..." autocomplete="off">
+      <div class="small" style="margin-top:6px">Create one at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a> (add a few dollars of credit). Stored only on this device.</div>
+      <label for="cmodel">Claude model</label>
+      <input type="text" id="cmodel" value="claude-haiku-5-5">
+    </div>
+    <div id="geminiBox">
+      <label for="key">Gemini API key (free)</label>
+      <input type="password" id="key" placeholder="Paste key here" autocomplete="off">
+      <div class="small" style="margin-top:6px">Get one at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.</div>
+      <label for="model">Gemini model</label>
+      <input type="text" id="model" value="gemini-3.8-flash">
+    </div>
+    <label><input type="checkbox" id="showTrue" checked> Show green "true" cards too</label>
+    <label><input type="checkbox" id="vibrate" checked> Vibrate on a red verdict</label>
+    <p class="small">Heads-up: Chrome sends audio to Google for transcription. Transcribed text goes to whichever AI provider you pick, so check its data policy. Let your guests know it's on.</p>
+    <div class="row" style="margin-top:12px"><button class="big" value="ok">Save</button></div>
+  </form>
+</dialog>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const store = {
+    get: (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch { return d; } },
+    set: (k, v) => { try { localStorage.setItem(k, v); } catch {} }
+  };
+
+  const SYSTEM = `You are a friendly fact-checker quietly listening to a family dinner conversation. The text is raw speech-to-text and may contain mistakes.
+Extract ONLY objectively checkable factual claims (dates, statistics, science, history, geography, "who invented X", etc.).
+Ignore opinions, jokes, personal stories, predictions, small talk, questions, and anything ambiguous. If a "claim" looks like a speech-recognition error, skip it.
+Verify each claim using search. Verdicts:
+- "true": correct
+- "false": clearly wrong (only when you are confident)
+- "misleading": a common myth, oversimplification, or partly true
+- "unverified": could not confirm either way
+Keep each explanation to one or two warm, non-snarky sentences that state the correct fact.
+Respond with ONLY JSON, no markdown fences: {"claims":[{"claim":"short restatement","verdict":"true|false|misleading|unverified","explanation":"..."}]}
+If there is nothing checkable, respond {"claims":[]}.`;
+
+  let listening = false, rec = null, buffer = '', recent = '', timer = null, pending = 0, wakeLock = null;
+  let transcriptLog = []; // {t, text}
+
+  // ---------- settings ----------
+  if (store.get('tc_model', '') === 'gemini-2.5-flash') store.set('tc_model', 'gemini-3.8-flash');
+  $('provider').value = store.get('tc_provider', 'claude');
+  $('ckey').value = store.get('tc_ckey', '');
+  $('cmodel').value = store.get('tc_cmodel', 'claude-haiku-5-5');
+  $('key').value = store.get('tc_key', '');
+  $('model').value = store.get('tc_model', 'gemini-3.8-flash');
+  $('showTrue').checked = store.get('tc_showTrue', '1') === '1';
+  $('vibrate').checked = store.get('tc_vibrate', '1') === '1';
+  function syncProvider() {
+    const c = $('provider').value === 'claude';
+    $('claudeBox').style.display = c ? '' : 'none';
+    $('geminiBox').style.display = c ? 'none' : '';
+  }
+  $('provider').onchange = syncProvider; syncProvider();
+  $('gear').onclick = () => $('settings').showModal();
+  $('settings').addEventListener('close', () => {
+    store.set('tc_provider', $('provider').value);
+    store.set('tc_ckey', $('ckey').value.trim());
+    store.set('tc_cmodel', $('cmodel').value.trim() || 'claude-haiku-5-5');
+    store.set('tc_key', $('key').value.trim());
+    store.set('tc_model', $('model').value.trim() || 'gemini-3.8-flash');
+    store.set('tc_showTrue', $('showTrue').checked ? '1' : '0');
+    store.set('tc_vibrate', $('vibrate').checked ? '1' : '0');
+  });
+  const activeKey = () => store.get(store.get('tc_provider', 'claude') === 'claude' ? 'tc_ckey' : 'tc_key', '');
+  if (!activeKey()) setTimeout(() => $('settings').showModal(), 300);
+
+  // ---------- UI helpers ----------
+  function setStatus(on, text) {
+    $('dot').classList.toggle('on', on);
+    $('statusText').textContent = text;
+  }
+  function showError(msg) {
+    const d = document.createElement('div'); d.className = 'err'; d.textContent = msg;
+    $('errors').prepend(d); setTimeout(() => d.remove(), 12000);
+  }
+  function flash(kind) {
+    document.body.classList.remove('flash-green', 'flash-red', 'flash-amber');
+    void document.body.offsetWidth;
+    document.body.classList.add('flash-' + kind);
+    setTimeout(() => document.body.classList.remove('flash-' + kind), 1800);
+  }
+  function setLive(final, interim) {
+    $('live').innerHTML = '';
+    if (!final.trim() && !interim.trim()) {
+      const h = document.createElement('span'); h.className = 'small';
+      h.textContent = listening ? 'Listening… say a fact.' : 'Live transcript appears here.';
+      $('live').append(h); return;
+    }
+    const b = document.createElement('b'); b.textContent = final.slice(-220);
+    const i = document.createElement('span'); i.textContent = ' ' + interim;
+    $('live').append(b, i);
+  }
+
+  const LABEL = { true: '✓ True', false: '✗ False', misleading: '⚠ Misleading', unverified: '? Unverified' };
+  function addCard(c, sources) {
+    const v = ['true', 'false', 'misleading', 'unverified'].includes(c.verdict) ? c.verdict : 'unverified';
+    if (v === 'true' && !$('showTrue').checked) return;
+    if ($('results').querySelector('.empty')) $('results').innerHTML = '';
+    const card = document.createElement('div'); card.className = 'card ' + v;
+    const verdict = document.createElement('div'); verdict.className = 'verdict'; verdict.textContent = LABEL[v];
+    const claim = document.createElement('div'); claim.className = 'claim'; claim.textContent = c.claim || '';
+    const why = document.createElement('div'); why.className = 'why'; why.textContent = c.explanation || '';
+    card.append(verdict, claim, why);
+    if (sources && sources.length) {
+      const s = document.createElement('div'); s.className = 'src';
+      sources.slice(0, 4).forEach(src => {
+        const a = document.createElement('a'); a.href = src.uri; a.target = '_blank'; a.rel = 'noopener';
+        a.textContent = src.title || 'source'; s.append(a);
+      });
+      card.append(s);
+    }
+    $('results').prepend(card);
+    if (v === 'false') { flash('red'); if ($('vibrate').checked && navigator.vibrate) navigator.vibrate([200, 100, 200]); }
+    else if (v === 'misleading') flash('amber');
+    else if (v === 'true') flash('green');
+  }
+
+  // ---------- fact-check call ----------
+  class ApiError extends Error { constructor(status, detail) { super(detail); this.status = status; this.detail = detail; } }
+  const parseClaims = out => {
+    const i = out.lastIndexOf('{"claims"');
+    const m = i >= 0 ? out.slice(i).match(/^\{[\s\S]*\}/) : out.match(/\{[\s\S]*\}/);
+    if (!m) return [];
+    try { return JSON.parse(m[0]).claims || []; } catch { return []; }
+  };
+  const errDetail = async res => { try { const j = await res.json(); return j.error?.message || ''; } catch { return ''; } };
+
+  async function callGemini(prompt) {
+    const model = store.get('tc_model', 'gemini-3.8-flash');
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': store.get('tc_key', '') },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: SYSTEM }] },
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        tools: [{ google_search: {} }],
+        generationConfig: { temperature: 0 }
+      })
+    });
+    if (!res.ok) throw new ApiError(res.status, await errDetail(res));
+    const data = await res.json();
+    const cand = data.candidates && data.candidates[0];
+    const out = (cand?.content?.parts || []).map(p => p.text || '').join('');
+    const sources = (cand?.groundingMetadata?.groundingChunks || [])
+      .map(c => c.web).filter(Boolean).map(w => ({ uri: w.uri, title: w.title }));
+    return { claims: parseClaims(out), sources };
+  }
+
+  async function callClaude(prompt) {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': store.get('tc_ckey', ''),
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: store.get('tc_cmodel', 'claude-haiku-5-5'),
+        max_tokens: 1500,
+        system: SYSTEM,
+        messages: [{ role: 'user', content: prompt }],
+        tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 3 }]
+      })
+    });
+    if (!res.ok) throw new ApiError(res.status, await errDetail(res));
+    const data = await res.json();
+    const blocks = data.content || [];
+    const out = blocks.filter(b => b.type === 'text').map(b => b.text).join('');
+    const sources = [], seen = new Set();
+    blocks.filter(b => b.type === 'web_search_tool_result' && Array.isArray(b.content)).forEach(b =>
+      b.content.forEach(r => { if (r.url && !seen.has(r.url)) { seen.add(r.url); sources.push({ uri: r.url, title: r.title }); } }));
+    return { claims: parseClaims(out), sources };
+  }
+
+  async function check(text) {
+    const provider = store.get('tc_provider', 'claude');
+    if (!activeKey()) { $('settings').showModal(); return; }
+    pending++; setStatus(listening, listening ? 'Listening… (checking)' : 'Checking…');
+    const prompt = (recent ? 'Earlier context (do not re-check): ' + recent + '\n\n' : '') + 'New speech to check: ' + text;
+    try {
+      const { claims, sources } = await (provider === 'claude' ? callClaude(prompt) : callGemini(prompt));
+      claims.forEach(c => addCard(c, sources));
+      recent = (recent + ' ' + text).slice(-400);
+    } catch (e) {
+      if (e instanceof ApiError) {
+        const d = e.detail ? ' ' + e.detail : '';
+        if (e.status === 429) showError('Rate limit hit. Slowing down; try again in a minute.' + d);
+        else if (e.status === 404) showError('Model not found or retired. Change the model name in settings.' + d);
+        else if (e.status === 401 || e.status === 403) showError('API key problem.' + d);
+        else if (e.status === 400) showError('Request rejected.' + d);
+        else showError('Error ' + e.status + '.' + d);
+      } else showError('Network error: ' + e.message);
+    } finally {
+      pending--;
+      if (pending === 0) setStatus(listening, listening ? 'Listening…' : 'Not listening');
+    }
+  }
+
+  // Check ~2.5s after speech stops, then wipe the transcript so you can speak again.
+  function scheduleFlush() {
+    clearTimeout(timer);
+    timer = setTimeout(flushNow, 2500);
+  }
+  function flushNow() {
+    timer = null;
+    const text = buffer.trim();
+    if (text.split(/\s+/).filter(Boolean).length < 4) return; // too short; keep for next round
+    buffer = '';
+    finalText = ''; setLive('', '');
+    check(text);
+  }
+
+  // ---------- speech recognition ----------
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let finalText = '';
+  function startRec() {
+    rec = new SR();
+    rec.continuous = true; rec.interimResults = true; rec.lang = 'en-US';
+    rec.onresult = e => {
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) {
+          finalText += ' ' + t.trim(); buffer += ' ' + t.trim();
+          transcriptLog.push({ t: Date.now(), text: t.trim() });
+          scheduleFlush();
+        } else interim += t;
+      }
+      setLive(finalText, interim);
+      if (buffer.trim()) scheduleFlush();
+    };
+    rec.onerror = e => {
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+        showError('Microphone blocked. Allow mic access for this site in Chrome settings.');
+        stopListening();
+      }
+    };
+    rec.onend = () => { if (listening) setTimeout(() => { try { startRec(); } catch {} }, 250); };
+    try { rec.start(); } catch (e) { showError('Could not start mic: ' + e.message); }
+  }
+  async function startListening() {
+    if (!SR) { showError('This browser has no speech recognition. Use Chrome on Android.'); return; }
+    if (!activeKey()) { $('settings').showModal(); return; }
+    if (location.protocol === 'file:') showError('This page is opened as a local file, so Chrome asks for the mic every time. Host it (Netlify/GitHub Pages) or serve it from localhost to make the permission stick.');
+    try { // one explicit grant up front; release right away so speech recognition can use the mic
+      const ms = await navigator.mediaDevices.getUserMedia({ audio: true });
+      ms.getTracks().forEach(t => t.stop());
+    } catch (e) { showError('Microphone permission was denied. Click the lock icon in the address bar, set Microphone to Allow, and reload.'); return; }
+    listening = true; $('toggle').textContent = '■ Stop'; $('toggle').classList.add('stop');
+    setStatus(true, 'Listening…'); setLive(finalText, ''); startRec();
+    try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
+  }
+  function stopListening() {
+    listening = false; $('toggle').textContent = '🎙 Start listening'; $('toggle').classList.remove('stop');
+    setStatus(false, 'Not listening');
+    try { rec && rec.stop(); } catch {}
+    try { wakeLock && wakeLock.release(); } catch {}
+  }
+  $('toggle').onclick = () => listening ? stopListening() : startListening();
+  document.addEventListener('visibilitychange', async () => {
+    if (listening && document.visibilityState === 'visible') { try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {} }
+  });
+
+  // "Settle this": check the last ~45 seconds immediately
+  $('settle').onclick = () => {
+    const cutoff = Date.now() - 45000;
+    const text = (transcriptLog.filter(x => x.t >= cutoff).map(x => x.text).join(' ') + ' ' + buffer).trim();
+    buffer = ''; if (timer) { clearTimeout(timer); timer = null; }
+    if (!text) { showError('Nothing heard in the last 45 seconds.'); return; }
+    finalText = ''; setLive('', '');
+    check(text);
+  };
+
+  $('manual').onsubmit = e => {
+    e.preventDefault();
+    const v = $('manualInput').value.trim(); if (!v) return;
+    $('manualInput').value = ''; check(v);
+  };
+})();
+</script>
+</body>
+</html>
