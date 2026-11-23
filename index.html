@@ -35,6 +35,12 @@
   .card.true { border-color:var(--green); }
   .card.false { border-color:var(--red); }
   .card.misleading { border-color:var(--amber); }
+  .top { display:flex; align-items:center; justify-content:space-between; }
+  .spk { background:none; border:0; font-size:20px; color:var(--mute); padding:2px 8px; margin:-4px -6px 0 0; cursor:pointer; }
+  .spk:active { transform:scale(.9); }
+  .card.not_checkable { border-color:var(--grey); }
+  .not_checkable .verdict { color:var(--mute); }
+  .card.note { border-color:#3a2e25; background:transparent; color:var(--mute); font-size:13px; padding:8px 12px; }
   .verdict { font-size:12px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; }
   .true .verdict { color:var(--green); } .false .verdict { color:var(--red); } .misleading .verdict { color:var(--amber); } .unverified .verdict { color:var(--mute); }
   .claim { font-weight:600; margin:2px 0 4px; }
@@ -55,7 +61,7 @@
 <main>
   <header>
     <h1>🦃 Turkey Check</h1>
-    <button class="gear" id="gear" aria-label="Settings">⚙︎</button>
+    <div><button class="gear" id="snd" aria-label="Sound on/off">🔊</button><button class="gear" id="gear" aria-label="Settings">⚙︎</button></div>
   </header>
   <div id="status"><span class="dot" id="dot"></span><span id="statusText">Not listening</span></div>
 
@@ -73,6 +79,7 @@
 
   <div id="errors"></div>
   <div id="results"><div class="empty">Nothing checked yet.<br>Only clearly checkable facts get a verdict, so most chatter is ignored.</div></div>
+<p class="small" style="text-align:center;margin:24px 0">Turkey Check v18</p>
 </main>
 
 <dialog id="settings">
@@ -97,6 +104,16 @@
       <label for="model">Gemini model</label>
       <input type="text" id="model" value="gemini-3.8-flash">
     </div>
+    <label><input type="checkbox" id="sfx"> Sound effects (chime / buzzer)</label>
+    <label><input type="checkbox" id="narrate"> Also read every answer aloud automatically (off = tap 🔊 on a card)</label>
+    <label for="voice">Narration voice</label>
+    <select id="voice" style="width:100%;padding:10px;border-radius:8px;border:1px solid #4a3b30;background:#1b1410;color:#f4ece4;font-size:16px"><option value="">Default voice</option></select>
+    <label for="vol">Sound effects volume</label>
+    <input type="range" id="vol" min="0.5" max="3" step="0.1" style="width:100%">
+    <div class="row" style="margin-top:10px"><button type="button" class="alt" id="pf">▶ Test "false"</button><button type="button" class="alt" id="pt">▶ Test "true"</button></div>
+    <div class="small" id="sndStatus" style="white-space:pre-line;margin-top:8px"></div>
+    <p class="small">To use your own sounds, put files named <b>false.mp3</b> and <b>true.mp3</b> next to index.html in the repo.</p>
+    <label><input type="checkbox" id="showNotes"> Show a note when nothing was fact-checkable</label>
     <label><input type="checkbox" id="showTrue" checked> Show green "true" cards too</label>
     <label><input type="checkbox" id="vibrate" checked> Vibrate on a red verdict</label>
     <p class="small">Heads-up: Chrome sends audio to Google for transcription. Transcribed text goes to whichever AI provider you pick, so check its data policy. Let your guests know it's on.</p>
@@ -114,15 +131,16 @@
 
   const SYSTEM = `You are a friendly fact-checker quietly listening to a family dinner conversation. The text is raw speech-to-text and may contain mistakes.
 Extract ONLY objectively checkable factual claims (dates, statistics, science, history, geography, "who invented X", etc.).
-Ignore opinions, jokes, personal stories, predictions, small talk, questions, and anything ambiguous. If a "claim" looks like a speech-recognition error, skip it.
-Verify each claim using search. Verdicts:
+If someone states something as a point but it cannot be verified (an opinion, taste, prediction, value judgment, joke, or a private personal experience), include it with verdict "not_checkable" and a short, kind explanation of why it cannot be fact-checked, for example "That is a matter of taste." Do not search for these. Skip pure small talk, requests, questions, and anything that looks like a speech-recognition error.
+Always run a web search to verify each claim before giving a verdict; never answer from memory alone. Verdicts:
 - "true": correct
 - "false": clearly wrong (only when you are confident)
 - "misleading": a common myth, oversimplification, or partly true
 - "unverified": could not confirm either way
-Keep each explanation to one or two warm, non-snarky sentences that state the correct fact.
-Respond with ONLY JSON, no markdown fences: {"claims":[{"claim":"short restatement","verdict":"true|false|misleading|unverified","explanation":"..."}]}
-If there is nothing checkable, respond {"claims":[]}.`;
+- "not_checkable": cannot be verified at all (opinion, preference, prediction, etc.)
+Keep each explanation to at most two short, warm, non-snarky sentences (under 40 words total) that state the correct fact.
+Respond with ONLY JSON, no markdown fences: {"claims":[{"claim":"short restatement","verdict":"true|false|misleading|unverified|not_checkable","explanation":"...","sources":[{"title":"site name","url":"https://..."}]}]}
+In the sources field, list 1-3 URLs that came from your search results and support the verdict.\nIf there is nothing checkable, respond {"claims":[]}.`;
 
   let listening = false, rec = null, buffer = '', recent = '', timer = null, pending = 0, wakeLock = null;
   let transcriptLog = []; // {t, text}
@@ -135,6 +153,7 @@ If there is nothing checkable, respond {"claims":[]}.`;
   $('key').value = store.get('tc_key', '');
   $('model').value = store.get('tc_model', 'gemini-3.8-flash');
   $('showTrue').checked = store.get('tc_showTrue', '1') === '1';
+  $('showNotes').checked = store.get('tc_showNotes', '1') === '1';
   $('vibrate').checked = store.get('tc_vibrate', '1') === '1';
   function syncProvider() {
     const c = $('provider').value === 'claude';
@@ -142,7 +161,7 @@ If there is nothing checkable, respond {"claims":[]}.`;
     $('geminiBox').style.display = c ? 'none' : '';
   }
   $('provider').onchange = syncProvider; syncProvider();
-  $('gear').onclick = () => $('settings').showModal();
+  $('gear').onclick = () => { $('settings').showModal(); ensureCustom(true).then(updateSndStatus); updateSndStatus(); };
   $('settings').addEventListener('close', () => {
     store.set('tc_provider', $('provider').value);
     store.set('tc_ckey', $('ckey').value.trim());
@@ -150,10 +169,213 @@ If there is nothing checkable, respond {"claims":[]}.`;
     store.set('tc_key', $('key').value.trim());
     store.set('tc_model', $('model').value.trim() || 'gemini-3.8-flash');
     store.set('tc_showTrue', $('showTrue').checked ? '1' : '0');
+    store.set('tc_showNotes', $('showNotes').checked ? '1' : '0');
     store.set('tc_vibrate', $('vibrate').checked ? '1' : '0');
   });
   const activeKey = () => store.get(store.get('tc_provider', 'claude') === 'claude' ? 'tc_ckey' : 'tc_key', '');
   if (!activeKey()) setTimeout(() => $('settings').showModal(), 300);
+
+  // ---------- sound effects & narration ----------
+  let actx = null, muteUntil = 0, queued = 0;
+  const soundOn = () => store.get('tc_sound', '1') === '1';
+  const isMuted = () => Date.now() < muteUntil || (window.speechSynthesis && speechSynthesis.speaking);
+  const customBuf = {};
+  const customInfo = {}, customTried = {}, inflight = {}, customEl = {};
+  // Fallback for pages opened as a local file: Chrome blocks fetch() there, but a media element can still play the file.
+  function probeAudio(name) {
+    return new Promise((res, rej) => {
+      const a = new Audio(); a.preload = 'metadata';
+      const t = setTimeout(rej, 4000);
+      a.onloadedmetadata = () => { clearTimeout(t); res(a.duration); };
+      a.onerror = () => { clearTimeout(t); rej(); };
+      a.src = name;
+    });
+  }
+  function playEl(e) {
+    const a = new Audio(e.src); a.volume = 1; a.play().catch(() => {});
+    return Math.min(isFinite(e.dur) ? e.dur : 2, 8) * 1000;
+  }
+  // Looks for false.mp3 / true.mp3 (or .wav, any capitalization of the first letter) next to index.html.
+  function loadCustom(kind, force) {
+    if (customBuf[kind] || customEl[kind]) return Promise.resolve();
+    if (inflight[kind]) return inflight[kind];
+    if (!actx || (!force && customTried[kind])) return Promise.resolve();
+    const base = kind === 'f' ? 'false' : 'true';
+    const cap = base[0].toUpperCase() + base.slice(1);
+    inflight[kind] = (async () => {
+      const tried = [];
+      for (const name of [base + '.mp3', base + '.wav', cap + '.mp3', cap + '.wav']) {
+        try {
+          const r = await fetch(name, { cache: 'no-cache' });
+          if (!r.ok) { tried.push(name + ' (' + r.status + ')'); continue; }
+          const ab = await r.arrayBuffer();
+          try { customBuf[kind] = await actx.decodeAudioData(ab); customInfo[kind] = 'using your file ' + name; return; }
+          catch { tried.push(name + ' (found, but the browser could not play it)'); }
+        } catch {
+          // fetch threw: usually the page was opened as a local file (file://). Try playing the file directly instead.
+          try {
+            const dur = await probeAudio(name);
+            customEl[kind] = { src: name, dur };
+            customInfo[kind] = 'using your file ' + name + ' (page opened as a local file, so it plays directly with no volume boost)';
+            return;
+          } catch { tried.push(name + ' (not found or blocked)'); }
+        }
+      }
+      customInfo[kind] = 'no usable file, using the built-in sound. Tried: ' + tried.join(', ');
+    })().finally(() => { customTried[kind] = true; delete inflight[kind]; });
+    return inflight[kind];
+  }
+  function ensureCustom(force) { unlockAudio(); return Promise.all([loadCustom('f', force), loadCustom('t', force)]); }
+  function updateSndStatus() {
+    const el = $('sndStatus'); if (!el) return;
+    el.textContent = 'False: ' + (customInfo.f || 'not checked yet') + '\nTrue: ' + (customInfo.t || 'not checked yet');
+  }
+  function playBuf(buf) {
+    const src = actx.createBufferSource(); src.buffer = buf; src.connect(actx.bus);
+    src.start(); src.stop(actx.currentTime + 8);
+    return Math.min(buf.duration, 8) * 1000;
+  }
+  function unlockAudio() {
+    try {
+      if (!actx) {
+        actx = new (window.AudioContext || window.webkitAudioContext)();
+        const comp = actx.createDynamicsCompressor(); comp.threshold.value = -20; comp.ratio.value = 8;
+        const master = actx.createGain(); master.gain.value = parseFloat(store.get('tc_vol', '1.5')) || 1.5;
+        comp.connect(master); master.connect(actx.destination);
+        actx.bus = comp; actx.master = master;
+        setTimeout(() => ensureCustom(), 0);
+      }
+      if (actx.state === 'suspended') actx.resume();
+    } catch {}
+    try {
+      if (window.speechSynthesis && !unlockAudio.done) {
+        const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); unlockAudio.done = true;
+      }
+    } catch {}
+  }
+  function tone(freq, start, dur, type, vol, slideTo, opts) {
+    if (!actx) return;
+    opts = opts || {};
+    const t0 = actx.currentTime + start;
+    const o = actx.createOscillator(), g = actx.createGain();
+    o.type = type || 'sine';
+    o.frequency.setValueAtTime(freq, t0);
+    if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t0 + dur);
+    if (opts.detune) o.detune.value = opts.detune;
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(vol || 0.25, t0 + (opts.attack || 0.02));
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    let node = o;
+    if (opts.lp || opts.wah) {
+      const f = actx.createBiquadFilter(); f.type = 'lowpass';
+      if (opts.wah) { // "wah" = a low-pass filter opening then closing, like a muted trombone
+        f.Q.value = 4; f.frequency.setValueAtTime(250, t0);
+        f.frequency.exponentialRampToValueAtTime(1500, t0 + dur * 0.4);
+        f.frequency.exponentialRampToValueAtTime(350, t0 + dur);
+      } else f.frequency.value = opts.lp;
+      o.connect(f); node = f;
+    }
+    if (opts.vib) { // vibrato
+      const l = actx.createOscillator(), lg = actx.createGain();
+      l.frequency.value = opts.vib; lg.gain.value = 28; l.connect(lg); lg.connect(o.detune);
+      l.start(t0); l.stop(t0 + dur + 0.05);
+    }
+    node.connect(g); g.connect(actx.bus);
+    o.start(t0); o.stop(t0 + dur + 0.05);
+  }
+  function trom(f, t, d, slideTo, vib) { // two slightly detuned saws = brassy
+    tone(f, t, d, 'sawtooth', 0.38, slideTo, { wah: true, attack: 0.04, vib });
+    tone(f, t, d, 'sawtooth', 0.28, slideTo, { wah: true, attack: 0.04, detune: 9, vib });
+  }
+  // a soft bell: fundamental plus an inharmonic partial, quick attack, long decay
+  function bell(freq, start, dur, vol) {
+    tone(freq, start, dur, 'sine', vol, null, { attack: 0.005 });
+    tone(freq * 2.76, start, dur * 0.5, 'sine', vol * 0.3, null, { attack: 0.005 });
+  }
+  // returns approximate duration in ms. Passing `ov` (the settings preview buttons) bypasses the on/off switches.
+  function sfx(v, ov) {
+    if (!ov && (!soundOn() || store.get('tc_sfx', '1') !== '1')) return 0;
+    unlockAudio(); if (!actx) return 0;
+    if (v === 'true') {
+      if (customBuf.t) return playBuf(customBuf.t);
+      if (customEl.t) return playEl(customEl.t);
+      [523, 659, 784, 1047].forEach((f, i) => bell(f, i * 0.07, 0.45, 0.16)); return 750; // sparkle
+    }
+    if (v === 'false') {
+      if (customBuf.f) return playBuf(customBuf.f);
+      if (customEl.f) return playEl(customEl.f);
+      // sad trombone: three short falling notes, then one long drooping note with vibrato
+      trom(233, 0, 0.38); trom(220, 0.45, 0.38); trom(208, 0.9, 0.38); trom(196, 1.35, 1.3, 172, 5.5);
+      return 2700;
+    }
+    if (v === 'misleading') { tone(392, 0, 0.2, 'triangle', 0.3); tone(294, 0.22, 0.32, 'triangle', 0.3); return 580; }
+    tone(440, 0, 0.14, 'sine', 0.15); return 200;
+  }
+  function narrate(v, c, delay, force) {
+    if (!window.speechSynthesis) return;
+    if (!force && (!soundOn() || store.get('tc_autonarr', '0') !== '1')) return; // auto-narration is off unless enabled
+    if (!force && queued >= 3) return; // don't pile up during rapid-fire
+    const word = { true: 'True', false: 'False', misleading: 'Misleading', unverified: 'Unverified', not_checkable: 'Not fact-checkable' }[v] || '';
+    const full = (word + '. ' + (c.explanation || c.claim || '')).replace(/\s+/g, ' ').trim();
+    // Split into sentence chunks: avoids Chrome cutting long utterances off (~15s) and never truncates mid-word.
+    const sentences = full.match(/[^.!?]+(?:[.!?]+["')\]]*|$)\s*/g) || [full];
+    const chunks = []; let cur = '';
+    sentences.forEach(sn => {
+      if ((cur + sn).length > 180 && cur) { chunks.push(cur.trim()); cur = sn; } else cur += sn;
+    });
+    if (cur.trim()) chunks.push(cur.trim());
+    const wanted = store.get('tc_voice', '');
+    const voice = wanted ? speechSynthesis.getVoices().find(x => x.name === wanted) : null;
+    queued++;
+    muteUntil = Math.max(muteUntil, Date.now() + delay + 1500); // keep the mic from hearing us
+    const finish = () => { queued = Math.max(0, queued - 1); muteUntil = Date.now() + 800; };
+    setTimeout(() => {
+      chunks.forEach((text, i) => {
+        const u = new SpeechSynthesisUtterance(text);
+        if (voice) u.voice = voice;
+        u.rate = 1.05;
+        u.onstart = () => { muteUntil = Infinity; };
+        if (i === chunks.length - 1) { u.onend = finish; u.onerror = finish; }
+        else u.onerror = finish;
+        try { speechSynthesis.speak(u); } catch { finish(); }
+      });
+    }, delay);
+  }
+  function feedback(v, c) {
+    ensureCustom().then(() => {
+      const ms = sfx(v);
+      if (ms) muteUntil = Math.max(muteUntil, Date.now() + ms + 300);
+      narrate(v, c, ms ? ms + 100 : 0);
+    });
+  }
+  // sound settings wiring
+  $('sfx').checked = store.get('tc_sfx', '1') === '1';
+  $('narrate').checked = store.get('tc_autonarr', '0') === '1';
+  $('vol').value = store.get('tc_vol', '1.5');
+  $('vol').oninput = () => { store.set('tc_vol', $('vol').value); if (actx && actx.master) actx.master.gain.value = parseFloat($('vol').value); };
+  $('pf').onclick = () => ensureCustom(true).then(() => { sfx('false', {}); updateSndStatus(); });
+  $('pt').onclick = () => ensureCustom(true).then(() => { sfx('true', {}); updateSndStatus(); });
+  const syncSndBtn = () => { $('snd').textContent = soundOn() ? '🔊' : '🔇'; };
+  syncSndBtn();
+  $('snd').onclick = () => {
+    store.set('tc_sound', soundOn() ? '0' : '1'); syncSndBtn();
+    if (!soundOn()) { try { speechSynthesis.cancel(); } catch {} queued = 0; muteUntil = 0; } else unlockAudio();
+  };
+  function loadVoices() {
+    if (!window.speechSynthesis) return;
+    const sel = $('voice'); if (!sel) return;
+    const vs = speechSynthesis.getVoices().filter(x => /^en/i.test(x.lang));
+    sel.innerHTML = '<option value="">Default voice</option>';
+    vs.forEach(x => { const o = document.createElement('option'); o.value = x.name; o.textContent = x.name + ' (' + x.lang + ')'; sel.append(o); });
+    sel.value = store.get('tc_voice', '');
+  }
+  loadVoices();
+  if (window.speechSynthesis) speechSynthesis.onvoiceschanged = loadVoices;
+  $('settings').addEventListener('close', () => {
+    store.set('tc_sfx', $('sfx').checked ? '1' : '0');
+    store.set('tc_autonarr', $('narrate').checked ? '1' : '0');
+    store.set('tc_voice', $('voice').value);
+  });
 
   // ---------- UI helpers ----------
   function setStatus(on, text) {
@@ -182,37 +404,64 @@ If there is nothing checkable, respond {"claims":[]}.`;
     $('live').append(b, i);
   }
 
-  const LABEL = { true: '✓ True', false: '✗ False', misleading: '⚠ Misleading', unverified: '? Unverified' };
+  const LABEL = { true: '✓ True', false: '✗ False', misleading: '⚠ Misleading', unverified: '? Unverified', not_checkable: '💭 Not fact-checkable' };
   function addCard(c, sources) {
-    const v = ['true', 'false', 'misleading', 'unverified'].includes(c.verdict) ? c.verdict : 'unverified';
+    const v = ['true', 'false', 'misleading', 'unverified', 'not_checkable'].includes(c.verdict) ? c.verdict : 'unverified';
     if (v === 'true' && !$('showTrue').checked) return;
     if ($('results').querySelector('.empty')) $('results').innerHTML = '';
     const card = document.createElement('div'); card.className = 'card ' + v;
     const verdict = document.createElement('div'); verdict.className = 'verdict'; verdict.textContent = LABEL[v];
     const claim = document.createElement('div'); claim.className = 'claim'; claim.textContent = c.claim || '';
     const why = document.createElement('div'); why.className = 'why'; why.textContent = c.explanation || '';
-    card.append(verdict, claim, why);
-    if (sources && sources.length) {
-      const s = document.createElement('div'); s.className = 'src';
-      sources.slice(0, 4).forEach(src => {
-        const a = document.createElement('a'); a.href = src.uri; a.target = '_blank'; a.rel = 'noopener';
-        a.textContent = src.title || 'source'; s.append(a);
-      });
-      card.append(s);
+    const top = document.createElement('div'); top.className = 'top';
+    const spk = document.createElement('button'); spk.className = 'spk'; spk.type = 'button';
+    spk.textContent = '🔊'; spk.setAttribute('aria-label', 'Read this answer aloud');
+    spk.onclick = () => {
+      unlockAudio();
+      if (window.speechSynthesis && speechSynthesis.speaking) { try { speechSynthesis.cancel(); } catch {} queued = 0; muteUntil = Date.now() + 500; return; } // tap again to stop
+      narrate(v, c, 0, true);
+    };
+    top.append(verdict, spk);
+    card.append(top, claim, why);
+    if (v !== 'not_checkable') {
+    const known = new Set((sources || []).map(x => x.uri));
+    let list = Array.isArray(c.sources) ? c.sources.filter(x => x && known.has(x.url)).map(x => ({ uri: x.url, title: x.title })) : [];
+    if (!list.length) list = sources || [];
+    const s2 = document.createElement('div'); s2.className = 'src';
+    list.slice(0, 3).forEach(src => {
+      const a = document.createElement('a'); a.href = src.uri; a.target = '_blank'; a.rel = 'noopener';
+      a.textContent = src.title || 'source'; s2.append(a);
+    });
+    const g = document.createElement('a'); g.href = 'https://www.google.com/search?q=' + encodeURIComponent(c.claim || ''); g.target = '_blank'; g.rel = 'noopener';
+    g.textContent = '🔍 Google it'; s2.append(g);
+    card.append(s2);
     }
     $('results').prepend(card);
     if (v === 'false') { flash('red'); if ($('vibrate').checked && navigator.vibrate) navigator.vibrate([200, 100, 200]); }
     else if (v === 'misleading') flash('amber');
     else if (v === 'true') flash('green');
+    feedback(v, c);
   }
+
+  function addNote(text, msg) {
+    if (!$('showNotes').checked) return;
+    if ($('results').querySelector('.empty')) $('results').innerHTML = '';
+    const n = document.createElement('div'); n.className = 'card note';
+    n.textContent = msg || ('Nothing to fact-check in: \u201c' + text.slice(0, 120) + (text.length > 120 ? '\u2026' : '') + '\u201d');
+    $('results').prepend(n);
+  }
+
+  let lastCheck = { key: '', t: 0 };
+  const normText = t => (t || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const dedupeClaims = list => { const seen = new Set(); return list.filter(c => { const k = normText(c && c.claim); if (!k || seen.has(k)) return false; seen.add(k); return true; }); };
 
   // ---------- fact-check call ----------
   class ApiError extends Error { constructor(status, detail) { super(detail); this.status = status; this.detail = detail; } }
   const parseClaims = out => {
     const i = out.lastIndexOf('{"claims"');
     const m = i >= 0 ? out.slice(i).match(/^\{[\s\S]*\}/) : out.match(/\{[\s\S]*\}/);
-    if (!m) return [];
-    try { return JSON.parse(m[0]).claims || []; } catch { return []; }
+    if (!m) return null;
+    try { return JSON.parse(m[0]).claims || []; } catch { return null; }
   };
   const errDetail = async res => { try { const j = await res.json(); return j.error?.message || ''; } catch { return ''; } };
 
@@ -261,17 +510,24 @@ If there is nothing checkable, respond {"claims":[]}.`;
     const sources = [], seen = new Set();
     blocks.filter(b => b.type === 'web_search_tool_result' && Array.isArray(b.content)).forEach(b =>
       b.content.forEach(r => { if (r.url && !seen.has(r.url)) { seen.add(r.url); sources.push({ uri: r.url, title: r.title }); } }));
+    blocks.filter(b => b.type === 'text' && Array.isArray(b.citations)).forEach(b =>
+      b.citations.forEach(r => { if (r.url && !seen.has(r.url)) { seen.add(r.url); sources.push({ uri: r.url, title: r.title }); } }));
     return { claims: parseClaims(out), sources };
   }
 
   async function check(text) {
     const provider = store.get('tc_provider', 'claude');
     if (!activeKey()) { $('settings').showModal(); return; }
+    const key = normText(text), now = Date.now();
+    if (key && lastCheck.key === key && now - lastCheck.t < 5000) return;
+    lastCheck = { key, t: now };
     pending++; setStatus(listening, listening ? 'Listening… (checking)' : 'Checking…');
     const prompt = (recent ? 'Earlier context (do not re-check): ' + recent + '\n\n' : '') + 'New speech to check: ' + text;
     try {
       const { claims, sources } = await (provider === 'claude' ? callClaude(prompt) : callGemini(prompt));
-      claims.forEach(c => addCard(c, sources));
+      if (claims === null) addNote(text, "Couldn't read the checker's response for: \u201c" + text.slice(0, 80) + "\u201d. Try again.");
+      else if (!claims.length) addNote(text);
+      else dedupeClaims(claims).forEach(c => addCard(c, sources));
       recent = (recent + ' ' + text).slice(-400);
     } catch (e) {
       if (e instanceof ApiError) {
@@ -309,6 +565,7 @@ If there is nothing checkable, respond {"claims":[]}.`;
     rec = new SR();
     rec.continuous = true; rec.interimResults = true; rec.lang = 'en-US';
     rec.onresult = e => {
+      if (isMuted()) return;
       let interim = '';
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const t = e.results[i][0].transcript;
@@ -331,6 +588,7 @@ If there is nothing checkable, respond {"claims":[]}.`;
     try { rec.start(); } catch (e) { showError('Could not start mic: ' + e.message); }
   }
   async function startListening() {
+    unlockAudio();
     if (!SR) { showError('This browser has no speech recognition. Use Chrome on Android.'); return; }
     if (!activeKey()) { $('settings').showModal(); return; }
     if (location.protocol === 'file:') showError('This page is opened as a local file, so Chrome asks for the mic every time. Host it (Netlify/GitHub Pages) or serve it from localhost to make the permission stick.');
@@ -343,6 +601,7 @@ If there is nothing checkable, respond {"claims":[]}.`;
     try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
   }
   function stopListening() {
+    try { speechSynthesis.cancel(); } catch {} queued = 0; muteUntil = 0;
     listening = false; $('toggle').textContent = '🎙 Start listening'; $('toggle').classList.remove('stop');
     setStatus(false, 'Not listening');
     try { rec && rec.stop(); } catch {}
@@ -355,6 +614,7 @@ If there is nothing checkable, respond {"claims":[]}.`;
 
   // "Settle this": check the last ~45 seconds immediately
   $('settle').onclick = () => {
+    unlockAudio();
     const cutoff = Date.now() - 45000;
     const text = (transcriptLog.filter(x => x.t >= cutoff).map(x => x.text).join(' ') + ' ' + buffer).trim();
     buffer = ''; if (timer) { clearTimeout(timer); timer = null; }
@@ -364,7 +624,7 @@ If there is nothing checkable, respond {"claims":[]}.`;
   };
 
   $('manual').onsubmit = e => {
-    e.preventDefault();
+    e.preventDefault(); unlockAudio();
     const v = $('manualInput').value.trim(); if (!v) return;
     $('manualInput').value = ''; check(v);
   };
