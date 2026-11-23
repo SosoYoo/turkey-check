@@ -41,6 +41,19 @@
   .card.not_checkable { border-color:var(--grey); }
   .not_checkable .verdict { color:var(--mute); }
   .card.note { border-color:#3a2e25; background:transparent; color:var(--mute); font-size:13px; padding:8px 12px; }
+  .seg { display:flex; background:#241b15; border-radius:12px; padding:4px; gap:4px; margin:4px 0 14px; }
+  .seg button { flex:1; padding:10px; border:0; border-radius:9px; background:transparent; color:var(--mute); font-size:15px; font-weight:600; }
+  .seg button.on { background:#3b2e24; color:var(--text); }
+  .micwrap { display:flex; flex-direction:column; align-items:center; gap:10px; margin:6px 0 10px; }
+  .mic { width:116px; height:116px; border-radius:50%; border:0; background:#c2410c; color:#fff; font-size:44px; box-shadow:0 6px 18px rgba(0,0,0,.4); touch-action:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; transition:transform .1s, background .2s; }
+  .mic.live { background:#238636; animation:ring 1.6s infinite; }
+  .mic.held { transform:scale(.94); background:#238636; animation:ring 1.2s infinite; }
+  @keyframes ring { 0% { box-shadow:0 0 0 0 rgba(63,185,80,.55); } 100% { box-shadow:0 0 0 26px rgba(63,185,80,0); } }
+  .miclabel { color:var(--mute); font-size:14px; min-height:20px; text-align:center; }
+  .linkbtn { background:none; border:0; color:#9ecbff; font-size:14px; padding:4px 8px; text-decoration:underline; }
+  .card.pending { border-color:var(--grey); color:var(--text); font-size:15px; }
+  .spin { display:inline-block; width:12px; height:12px; border:2px solid #5a4a3e; border-top-color:#e8b04a; border-radius:50%; animation:spin .8s linear infinite; margin-right:8px; vertical-align:-1px; }
+  @keyframes spin { to { transform:rotate(360deg); } }
   .verdict { font-size:12px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; }
   .true .verdict { color:var(--green); } .false .verdict { color:var(--red); } .misleading .verdict { color:var(--amber); } .unverified .verdict { color:var(--mute); }
   .claim { font-weight:600; margin:2px 0 4px; }
@@ -63,11 +76,11 @@
     <h1>🦃 Turkey Check</h1>
     <div><button class="gear" id="snd" aria-label="Sound on/off">🔊</button><button class="gear" id="gear" aria-label="Settings">⚙︎</button></div>
   </header>
-  <div id="status"><span class="dot" id="dot"></span><span id="statusText">Not listening</span></div>
+  <div id="status"><span class="dot" id="dot"></span><span id="statusText">Not listening</span><span class="small" id="trialLeft" style="margin-left:auto"></span></div>
 
-  <div class="row">
-    <button class="big" id="toggle">🎙 Start listening</button>
-    <button class="alt" id="settle">Settle this</button>
+  <div class="micwrap">
+    <button type="button" id="toggle" class="mic" aria-label="Microphone"><span id="micIcon">🎙</span></button>
+    <div id="micLabel" class="miclabel"></div>
   </div>
 
   <div id="live"><span class="small">Live transcript appears here.</span></div>
@@ -79,7 +92,7 @@
 
   <div id="errors"></div>
   <div id="results"><div class="empty">Nothing checked yet.<br>Only clearly checkable facts get a verdict, so most chatter is ignored.</div></div>
-<p class="small" style="text-align:center;margin:24px 0">Turkey Check v18</p>
+<p class="small" style="text-align:center;margin:24px 0">Turkey Check v22</p>
 </main>
 
 <dialog id="settings">
@@ -87,9 +100,11 @@
     <h2 style="margin-top:0">Settings</h2>
     <label for="provider">AI provider</label>
     <select id="provider" style="width:100%;padding:10px;border-radius:8px;border:1px solid #4a3b30;background:#1b1410;color:#f4ece4;font-size:16px">
-      <option value="claude">Claude (paid, a few cents per dinner)</option>
+      <option value="shared">Free trial (no key needed)</option>
+      <option value="claude">My own Claude API key (unlimited)</option>
       <option value="gemini">Gemini (free tier, rate limited)</option>
     </select>
+    <div id="sharedBox" class="small" style="margin-top:8px">A limited number of free checks per day, courtesy of the app's owner. Need more? Switch to "My own Claude API key".</div>
     <div id="claudeBox">
       <label for="ckey">Claude API key</label>
       <input type="password" id="ckey" placeholder="sk-ant-..." autocomplete="off">
@@ -129,6 +144,11 @@
     set: (k, v) => { try { localStorage.setItem(k, v); } catch {} }
   };
 
+  // After you deploy the Cloudflare Worker (see worker.js), paste its URL here, e.g. 'https://turkey-check.yourname.workers.dev'
+  const PROXY_URL = '';
+  const DEFAULT_PROVIDER = PROXY_URL ? 'shared' : 'claude';
+  const deviceId = () => { let d = store.get('tc_dev', ''); if (!d) { d = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2) + Date.now()); store.set('tc_dev', d); } return d; };
+
   const SYSTEM = `You are a friendly fact-checker quietly listening to a family dinner conversation. The text is raw speech-to-text and may contain mistakes.
 Extract ONLY objectively checkable factual claims (dates, statistics, science, history, geography, "who invented X", etc.).
 If someone states something as a point but it cannot be verified (an opinion, taste, prediction, value judgment, joke, or a private personal experience), include it with verdict "not_checkable" and a short, kind explanation of why it cannot be fact-checked, for example "That is a matter of taste." Do not search for these. Skip pure small talk, requests, questions, and anything that looks like a speech-recognition error.
@@ -147,7 +167,9 @@ In the sources field, list 1-3 URLs that came from your search results and suppo
 
   // ---------- settings ----------
   if (store.get('tc_model', '') === 'gemini-2.5-flash') store.set('tc_model', 'gemini-3.8-flash');
-  $('provider').value = store.get('tc_provider', 'claude');
+  if (!PROXY_URL) { const o = $('provider').querySelector('option[value="shared"]'); if (o) o.remove(); }
+  $('provider').value = store.get('tc_provider', DEFAULT_PROVIDER);
+  if ($('provider').value !== store.get('tc_provider', DEFAULT_PROVIDER)) $('provider').value = DEFAULT_PROVIDER;
   $('ckey').value = store.get('tc_ckey', '');
   $('cmodel').value = store.get('tc_cmodel', 'claude-haiku-5-5');
   $('key').value = store.get('tc_key', '');
@@ -156,9 +178,10 @@ In the sources field, list 1-3 URLs that came from your search results and suppo
   $('showNotes').checked = store.get('tc_showNotes', '1') === '1';
   $('vibrate').checked = store.get('tc_vibrate', '1') === '1';
   function syncProvider() {
-    const c = $('provider').value === 'claude';
-    $('claudeBox').style.display = c ? '' : 'none';
-    $('geminiBox').style.display = c ? 'none' : '';
+    const p = $('provider').value;
+    $('sharedBox').style.display = p === 'shared' ? '' : 'none';
+    $('claudeBox').style.display = p === 'claude' ? '' : 'none';
+    $('geminiBox').style.display = p === 'gemini' ? '' : 'none';
   }
   $('provider').onchange = syncProvider; syncProvider();
   $('gear').onclick = () => { $('settings').showModal(); ensureCustom(true).then(updateSndStatus); updateSndStatus(); };
@@ -172,7 +195,8 @@ In the sources field, list 1-3 URLs that came from your search results and suppo
     store.set('tc_showNotes', $('showNotes').checked ? '1' : '0');
     store.set('tc_vibrate', $('vibrate').checked ? '1' : '0');
   });
-  const activeKey = () => store.get(store.get('tc_provider', 'claude') === 'claude' ? 'tc_ckey' : 'tc_key', '');
+  const curProvider = () => { const p = store.get('tc_provider', DEFAULT_PROVIDER); return (p === 'shared' && !PROXY_URL) ? 'claude' : p; };
+  const activeKey = () => { const p = curProvider(); return p === 'shared' ? 'shared' : store.get(p === 'claude' ? 'tc_ckey' : 'tc_key', ''); };
   if (!activeKey()) setTimeout(() => $('settings').showModal(), 300);
 
   // ---------- sound effects & narration ----------
@@ -405,7 +429,7 @@ In the sources field, list 1-3 URLs that came from your search results and suppo
   }
 
   const LABEL = { true: '✓ True', false: '✗ False', misleading: '⚠ Misleading', unverified: '? Unverified', not_checkable: '💭 Not fact-checkable' };
-  function addCard(c, sources) {
+  function addCard(c, sources, anchor) {
     const v = ['true', 'false', 'misleading', 'unverified', 'not_checkable'].includes(c.verdict) ? c.verdict : 'unverified';
     if (v === 'true' && !$('showTrue').checked) return;
     if ($('results').querySelector('.empty')) $('results').innerHTML = '';
@@ -436,19 +460,27 @@ In the sources field, list 1-3 URLs that came from your search results and suppo
     g.textContent = '🔍 Google it'; s2.append(g);
     card.append(s2);
     }
-    $('results').prepend(card);
+    if (anchor) $('results').insertBefore(card, anchor); else $('results').prepend(card);
     if (v === 'false') { flash('red'); if ($('vibrate').checked && navigator.vibrate) navigator.vibrate([200, 100, 200]); }
     else if (v === 'misleading') flash('amber');
     else if (v === 'true') flash('green');
     feedback(v, c);
   }
 
-  function addNote(text, msg) {
+  function addPending(text) {
+    if ($('results').querySelector('.empty')) $('results').innerHTML = '';
+    const d = document.createElement('div'); d.className = 'card pending';
+    const sp = document.createElement('span'); sp.className = 'spin';
+    const t = document.createElement('span');
+    t.textContent = 'Checking: \u201c' + text.slice(0, 200) + (text.length > 200 ? '\u2026' : '') + '\u201d';
+    d.append(sp, t); $('results').prepend(d); return d;
+  }
+  function addNote(text, msg, anchor) {
     if (!$('showNotes').checked) return;
     if ($('results').querySelector('.empty')) $('results').innerHTML = '';
     const n = document.createElement('div'); n.className = 'card note';
     n.textContent = msg || ('Nothing to fact-check in: \u201c' + text.slice(0, 120) + (text.length > 120 ? '\u2026' : '') + '\u201d');
-    $('results').prepend(n);
+    if (anchor) $('results').insertBefore(n, anchor); else $('results').prepend(n);
   }
 
   let lastCheck = { key: '', t: 0 };
@@ -486,6 +518,17 @@ In the sources field, list 1-3 URLs that came from your search results and suppo
     return { claims: parseClaims(out), sources };
   }
 
+  function parseAnthropic(data) {
+    const blocks = data.content || [];
+    const out = blocks.filter(b => b.type === 'text').map(b => b.text).join('');
+    const sources = [], seen = new Set();
+    blocks.filter(b => b.type === 'web_search_tool_result' && Array.isArray(b.content)).forEach(b =>
+      b.content.forEach(r => { if (r.url && !seen.has(r.url)) { seen.add(r.url); sources.push({ uri: r.url, title: r.title }); } }));
+    blocks.filter(b => b.type === 'text' && Array.isArray(b.citations)).forEach(b =>
+      b.citations.forEach(r => { if (r.url && !seen.has(r.url)) { seen.add(r.url); sources.push({ uri: r.url, title: r.title }); } }));
+    return { claims: parseClaims(out), sources };
+  }
+
   async function callClaude(prompt) {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -504,55 +547,60 @@ In the sources field, list 1-3 URLs that came from your search results and suppo
       })
     });
     if (!res.ok) throw new ApiError(res.status, await errDetail(res));
+    return parseAnthropic(await res.json());
+  }
+
+  // Free-trial mode: the Cloudflare Worker holds the key and enforces the limits.
+  async function callShared(text, context) {
+    const res = await fetch(PROXY_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, context, device: deviceId() })
+    });
+    if (!res.ok) throw new ApiError(res.status, await errDetail(res));
     const data = await res.json();
-    const blocks = data.content || [];
-    const out = blocks.filter(b => b.type === 'text').map(b => b.text).join('');
-    const sources = [], seen = new Set();
-    blocks.filter(b => b.type === 'web_search_tool_result' && Array.isArray(b.content)).forEach(b =>
-      b.content.forEach(r => { if (r.url && !seen.has(r.url)) { seen.add(r.url); sources.push({ uri: r.url, title: r.title }); } }));
-    blocks.filter(b => b.type === 'text' && Array.isArray(b.citations)).forEach(b =>
-      b.citations.forEach(r => { if (r.url && !seen.has(r.url)) { seen.add(r.url); sources.push({ uri: r.url, title: r.title }); } }));
-    return { claims: parseClaims(out), sources };
+    return Object.assign(parseAnthropic(data), { remaining: data._remaining });
   }
 
   async function check(text) {
-    const provider = store.get('tc_provider', 'claude');
-    if (!activeKey()) { $('settings').showModal(); return; }
+    const provider = curProvider();
+    if (!activeKey()) { showError('Add your API key first: paste it in Settings and save.'); $('settings').showModal(); return; }
     const key = normText(text), now = Date.now();
     if (key && lastCheck.key === key && now - lastCheck.t < 5000) return;
     lastCheck = { key, t: now };
     pending++; setStatus(listening, listening ? 'Listening… (checking)' : 'Checking…');
+    const ph = addPending(text);
     const prompt = (recent ? 'Earlier context (do not re-check): ' + recent + '\n\n' : '') + 'New speech to check: ' + text;
     try {
-      const { claims, sources } = await (provider === 'claude' ? callClaude(prompt) : callGemini(prompt));
-      if (claims === null) addNote(text, "Couldn't read the checker's response for: \u201c" + text.slice(0, 80) + "\u201d. Try again.");
-      else if (!claims.length) addNote(text);
-      else dedupeClaims(claims).forEach(c => addCard(c, sources));
+      const { claims, sources, remaining } = await (provider === 'shared' ? callShared(text, recent) : provider === 'claude' ? callClaude(prompt) : callGemini(prompt));
+      if (provider === 'shared' && remaining !== undefined) $('trialLeft').textContent = remaining + ' free check' + (remaining === 1 ? '' : 's') + ' left today';
+      if (claims === null) addNote(text, "Couldn't read the checker's response for: \u201c" + text.slice(0, 80) + "\u201d. Try again.", ph);
+      else if (!claims.length) addNote(text, null, ph);
+      else dedupeClaims(claims).forEach(c => addCard(c, sources, ph));
       recent = (recent + ' ' + text).slice(-400);
     } catch (e) {
       if (e instanceof ApiError) {
         const d = e.detail ? ' ' + e.detail : '';
-        if (e.status === 429) showError('Rate limit hit. Slowing down; try again in a minute.' + d);
+        if (e.detail === 'trial_exhausted') { showError('You\u2019ve used your free checks for today. For unlimited checks, open \u2699\uFE0E and choose \u201cMy own Claude API key\u201d.'); $('trialLeft').textContent = '0 free checks left today'; $('settings').showModal(); }
+        else if (e.detail === 'daily_cap') showError('The free checker is out of checks for today. Try again tomorrow, or use your own API key in \u2699\uFE0E.');
+        else if (e.status === 429) showError('Rate limit hit. Slowing down; try again in a minute.' + d);
         else if (e.status === 404) showError('Model not found or retired. Change the model name in settings.' + d);
         else if (e.status === 401 || e.status === 403) showError('API key problem.' + d);
         else if (e.status === 400) showError('Request rejected.' + d);
         else showError('Error ' + e.status + '.' + d);
       } else showError('Network error: ' + e.message);
     } finally {
+      ph.remove();
       pending--;
       if (pending === 0) setStatus(listening, listening ? 'Listening…' : 'Not listening');
     }
   }
 
-  // Check ~2.5s after speech stops, then wipe the transcript so you can speak again.
-  function scheduleFlush() {
-    clearTimeout(timer);
-    timer = setTimeout(flushNow, 2500);
-  }
-  function flushNow() {
+  // Runs when you let go of the mic button, then wipes the transcript so you can speak again.
+  function flushNow(minWords) {
     timer = null;
     const text = buffer.trim();
-    if (text.split(/\s+/).filter(Boolean).length < 4) return; // too short; keep for next round
+    if (text.split(/\s+/).filter(Boolean).length < (minWords || 4)) return; // too short; keep for next round
     buffer = '';
     finalText = ''; setLive('', '');
     check(text);
@@ -561,6 +609,11 @@ In the sources field, list 1-3 URLs that came from your search results and suppo
   // ---------- speech recognition ----------
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   let finalText = '';
+  let holdActive = false, pendingHoldFlush = false, micPrimed = false;
+  function updateMicUI() {
+    $('toggle').classList.toggle('held', holdActive);
+    $('micLabel').textContent = holdActive ? 'Listening\u2026 let go to check' : 'Press and hold, then speak';
+  }
   function startRec() {
     rec = new SR();
     rec.continuous = true; rec.interimResults = true; rec.lang = 'en-US';
@@ -572,11 +625,9 @@ In the sources field, list 1-3 URLs that came from your search results and suppo
         if (e.results[i].isFinal) {
           finalText += ' ' + t.trim(); buffer += ' ' + t.trim();
           transcriptLog.push({ t: Date.now(), text: t.trim() });
-          scheduleFlush();
         } else interim += t;
       }
       setLive(finalText, interim);
-      if (buffer.trim()) scheduleFlush();
     };
     rec.onerror = e => {
       if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
@@ -584,44 +635,61 @@ In the sources field, list 1-3 URLs that came from your search results and suppo
         stopListening();
       }
     };
-    rec.onend = () => { if (listening) setTimeout(() => { try { startRec(); } catch {} }, 250); };
+    rec.onend = () => {
+      if (listening) setTimeout(() => { try { startRec(); } catch {} }, 250);
+      else if (pendingHoldFlush) {
+        pendingHoldFlush = false;
+        const had = buffer.trim();
+        flushNow(1);
+        if (!had) showError('Didn\u2019t catch that. Keep holding the button while you speak.');
+      }
+    };
     try { rec.start(); } catch (e) { showError('Could not start mic: ' + e.message); }
   }
   async function startListening() {
     unlockAudio();
     if (!SR) { showError('This browser has no speech recognition. Use Chrome on Android.'); return; }
-    if (!activeKey()) { $('settings').showModal(); return; }
+    if (!activeKey()) { showError('Add your API key first: paste it in Settings, save, then tap the mic again.'); holdActive = false; updateMicUI(); $('settings').showModal(); return; }
     if (location.protocol === 'file:') showError('This page is opened as a local file, so Chrome asks for the mic every time. Host it (Netlify/GitHub Pages) or serve it from localhost to make the permission stick.');
-    try { // one explicit grant up front; release right away so speech recognition can use the mic
-      const ms = await navigator.mediaDevices.getUserMedia({ audio: true });
-      ms.getTracks().forEach(t => t.stop());
-    } catch (e) { showError('Microphone permission was denied. Click the lock icon in the address bar, set Microphone to Allow, and reload.'); return; }
-    listening = true; $('toggle').textContent = '■ Stop'; $('toggle').classList.add('stop');
+    if (!micPrimed) { // one explicit grant up front; release right away so speech recognition can use the mic
+      try {
+        const ms = await navigator.mediaDevices.getUserMedia({ audio: true });
+        ms.getTracks().forEach(t => t.stop());
+        micPrimed = true;
+      } catch (e) { showError('Microphone permission was denied. Click the lock icon in the address bar, set Microphone to Allow, and reload.'); holdActive = false; updateMicUI(); return; }
+    }
+    if (!holdActive) return; // let go before the mic was ready
+    listening = true; updateMicUI();
     setStatus(true, 'Listening…'); setLive(finalText, ''); startRec();
     try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
   }
   function stopListening() {
     try { speechSynthesis.cancel(); } catch {} queued = 0; muteUntil = 0;
-    listening = false; $('toggle').textContent = '🎙 Start listening'; $('toggle').classList.remove('stop');
+    listening = false; updateMicUI();
     setStatus(false, 'Not listening');
     try { rec && rec.stop(); } catch {}
     try { wakeLock && wakeLock.release(); } catch {}
   }
-  $('toggle').onclick = () => listening ? stopListening() : startListening();
+  function releaseHold() {
+    holdActive = false;
+    if (!listening) { updateMicUI(); return; } // let go before listening began
+    pendingHoldFlush = true;
+    stopListening(); // recognition delivers its last words, then onend runs the check
+    setTimeout(() => { if (pendingHoldFlush) { pendingHoldFlush = false; flushNow(1); } }, 1500);
+  }
+  $('toggle').addEventListener('pointerdown', e => {
+    e.preventDefault();
+    try { $('toggle').setPointerCapture(e.pointerId); } catch {}
+    holdActive = true; buffer = ''; finalText = ''; setLive('', ''); updateMicUI();
+    startListening();
+  });
+  ['pointerup', 'pointercancel'].forEach(t => $('toggle').addEventListener(t, () => { if (holdActive) releaseHold(); }));
+  $('toggle').addEventListener('contextmenu', e => e.preventDefault());
+  updateMicUI();
   document.addEventListener('visibilitychange', async () => {
     if (listening && document.visibilityState === 'visible') { try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {} }
   });
 
-  // "Settle this": check the last ~45 seconds immediately
-  $('settle').onclick = () => {
-    unlockAudio();
-    const cutoff = Date.now() - 45000;
-    const text = (transcriptLog.filter(x => x.t >= cutoff).map(x => x.text).join(' ') + ' ' + buffer).trim();
-    buffer = ''; if (timer) { clearTimeout(timer); timer = null; }
-    if (!text) { showError('Nothing heard in the last 45 seconds.'); return; }
-    finalText = ''; setLive('', '');
-    check(text);
-  };
 
   $('manual').onsubmit = e => {
     e.preventDefault(); unlockAudio();
