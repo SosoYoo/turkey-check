@@ -92,7 +92,7 @@
 
   <div id="errors"></div>
   <div id="results"><div class="empty">Nothing checked yet.<br>Only clearly checkable facts get a verdict, so most chatter is ignored.</div></div>
-<p class="small" style="text-align:center;margin:24px 0">Turkey Check v22</p>
+<p class="small" style="text-align:center;margin:24px 0">Turkey Check v23</p>
 </main>
 
 <dialog id="settings">
@@ -145,7 +145,7 @@
   };
 
   // After you deploy the Cloudflare Worker (see worker.js), paste its URL here, e.g. 'https://turkey-check.yourname.workers.dev'
-  const PROXY_URL = '';
+  const PROXY_URL = 'https://turkey-check.truth-checker.workers.dev';
   const DEFAULT_PROVIDER = PROXY_URL ? 'shared' : 'claude';
   const deviceId = () => { let d = store.get('tc_dev', ''); if (!d) { d = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2) + Date.now()); store.set('tc_dev', d); } return d; };
 
@@ -168,6 +168,8 @@ In the sources field, list 1-3 URLs that came from your search results and suppo
   // ---------- settings ----------
   if (store.get('tc_model', '') === 'gemini-2.5-flash') store.set('tc_model', 'gemini-3.8-flash');
   if (!PROXY_URL) { const o = $('provider').querySelector('option[value="shared"]'); if (o) o.remove(); }
+  // Visitors who saved "My own Claude key" before the free trial existed, but never entered a key, move to the free trial.
+  if (PROXY_URL && store.get('tc_provider', '') === 'claude' && !store.get('tc_ckey', '')) store.set('tc_provider', 'shared');
   $('provider').value = store.get('tc_provider', DEFAULT_PROVIDER);
   if ($('provider').value !== store.get('tc_provider', DEFAULT_PROVIDER)) $('provider').value = DEFAULT_PROVIDER;
   $('ckey').value = store.get('tc_ckey', '');

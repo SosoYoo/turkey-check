@@ -1,0 +1,12 @@
+name = "turkey-check"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+[[kv_namespaces]]
+binding = "COUNTS"
+id = "861e74788bea484aad04bc76dc27a561"
+
+[vars]
+PER_DEVICE_DAILY = "15"
+PER_IP_DAILY = "40"
+GLOBAL_DAILY = "150"
